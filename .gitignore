@@ -1,0 +1,6 @@
+target
+dependency-reduced-pom.xml
+sparkml.iml
+sparkml.ipr
+sparkml.iws
+src/test/data/kmeans_data.txt
