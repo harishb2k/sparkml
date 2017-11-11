@@ -1,5 +1,17 @@
 package com.harish.sample.spark;
 
+import java.util.Arrays;
+import java.util.List;
+
+import org.apache.spark.ml.feature.NGram;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.RowFactory;
+import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.Metadata;
+import org.apache.spark.sql.types.StructField;
+import org.apache.spark.sql.types.StructType;
 
 import com.google.common.collect.Lists;
 import kafka.serializer.StringDecoder;
@@ -26,14 +38,23 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
 public class App {
     private static final Pattern SPACE = Pattern.compile(" ");
+    public static int counter;
 
     public static void main(String[] args) throws Exception {
+
+        if (true) {
+            // new JavaNGramExample().main(args);
+            // return;
+        }
+
+
         SparkConf conf = new SparkConf().setMaster("local")
                 .setAppName("Work Count App 1");
         conf.setExecutorEnv("SPARK_MASTER_HOST", "127.0.0.1");
@@ -44,6 +65,7 @@ public class App {
         kafkaParams.put("metadata.broker.list", "localhost:9092");
         kafkaParams.put("zookeeper.connect", "localhost:2181");
         kafkaParams.put("group.id", "123");
+        kafkaParams.put("startingOffsets", "earliest");
 
         OffsetRange offsetRange[] = new OffsetRange[1];
         offsetRange[0] = OffsetRange.create("com_olacabs_cpp_generic_events", 0, 0l, Long.MAX_VALUE);
@@ -61,8 +83,40 @@ public class App {
         );
         JavaDStream<String> lines = kafkaStream.map(new FirstMap());
         JavaDStream<String> words = lines.flatMap(new FlatMapper());
-        JavaPairDStream<String, Integer> wordCounts = words.mapToPair(new XX()).reduceByKey(new XY());
-        wordCounts.print();
+        // JavaPairDStream<String, Integer> wordCounts = words.mapToPair(new XX()).reduceByKey(new XY());
+
+        //wordCounts.print();
+        lines.foreachRDD((stringJavaRDD, time) -> {
+            SparkSession spark = JavaSparkSessionSingleton.getInstance(stringJavaRDD.context().getConf());
+
+            JavaRDD<org.apache.spark.sql.Row> rowRDD = stringJavaRDD.map(new Function<String, Row>() {
+                @Override
+                public Row call(String msg) {
+                    String s[] = new String[2];
+                    s[0] = msg;
+                    s[1] = "The";
+                    if (msg.split(" ") == null || msg.split(" ").length == 0)
+                    {
+                        return null;
+                    }
+                    return RowFactory.create(counter++, msg.split(" "));
+                }
+            });
+
+            StructType schema = new StructType(new StructField[]{
+                    new StructField("id", DataTypes.IntegerType, false, Metadata.empty()),
+                    new StructField("words",  DataTypes.createArrayType(DataTypes.StringType), false, Metadata.empty())
+            });
+
+            Dataset<org.apache.spark.sql.Row>  msgDataFrame = spark.createDataFrame(rowRDD, schema);
+            msgDataFrame.show();
+
+            NGram ngramTransformer = new NGram().setN(10).setInputCol("words").setOutputCol("ngrams");
+
+            Dataset<org.apache.spark.sql.Row> ngramDataFrame = ngramTransformer.transform(msgDataFrame);
+            ngramDataFrame.select("ngrams").show(false);
+        });
+
 
         sc.start();
         sc.awaitTermination();
@@ -96,6 +150,7 @@ public class App {
                         return x + y;
                     }
                 });
+
 
         // Save the word count back out to a text file, causing evaluation.
         reducedCounts.saveAsTextFile("output");
@@ -158,5 +213,52 @@ class XY implements Function2<Integer, Integer, Integer> {
     @Override
     public Integer call(Integer integer, Integer integer2) throws Exception {
         return integer + integer2;
+    }
+}
+
+
+class JavaNGramExample {
+    public static void main(String[] args) {
+        SparkSession spark = SparkSession
+                .builder()
+                .master("local")
+                .appName("JavaNGramExample")
+                .getOrCreate();
+
+        // $example on$
+        List<org.apache.spark.sql.Row> data = Arrays.asList(
+                RowFactory.create(0, Arrays.asList("Hi", "I", "heard", "about", "Spark")),
+                RowFactory.create(1, Arrays.asList("I", "wish", "Java", "could", "use", "case", "classes")),
+                RowFactory.create(2, Arrays.asList("Logistic", "regression", "models", "are", "neat"))
+        );
+
+        StructType schema = new StructType(new StructField[]{
+                new StructField("id", DataTypes.IntegerType, false, Metadata.empty()),
+                new StructField(
+                        "words", DataTypes.createArrayType(DataTypes.StringType), false, Metadata.empty())
+        });
+
+        Dataset<org.apache.spark.sql.Row> wordDataFrame = spark.createDataFrame(data, schema);
+
+        NGram ngramTransformer = new NGram().setN(2).setInputCol("words").setOutputCol("ngrams");
+
+        Dataset<org.apache.spark.sql.Row> ngramDataFrame = ngramTransformer.transform(wordDataFrame);
+        ngramDataFrame.select("ngrams").show(false);
+        // $example off$
+
+        spark.stop();
+    }
+}
+
+class JavaSparkSessionSingleton {
+    private static transient SparkSession instance = null;
+    public static SparkSession getInstance(SparkConf sparkConf) {
+        if (instance == null) {
+            instance = SparkSession
+                    .builder()
+                    .config(sparkConf)
+                    .getOrCreate();
+        }
+        return instance;
     }
 }
