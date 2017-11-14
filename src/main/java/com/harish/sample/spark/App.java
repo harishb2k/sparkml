@@ -3,6 +3,7 @@ package com.harish.sample.spark;
 import java.util.Arrays;
 import java.util.List;
 
+import org.apache.spark.ml.feature.Binarizer;
 import org.apache.spark.ml.feature.NGram;
 import org.apache.spark.ml.feature.RegexTokenizer;
 import org.apache.spark.ml.linalg.VectorUDT;
@@ -50,6 +51,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.apache.spark.ml.feature.Tokenizer;
+import org.apache.spark.ml.feature.PCA;
+import org.apache.spark.ml.feature.PCAModel;
 
 public class App {
     private static final Pattern SPACE = Pattern.compile(" ");
@@ -64,7 +67,7 @@ public class App {
             // new JavaNGramExample().main(args);
             // return;
 
-            Tokenizer(conf);
+            PCA(conf);
             return;
         }
 
@@ -212,6 +215,77 @@ public class App {
 +-----------------------------------+------------------------------------------+------+
  */
 
+    }
+
+
+    public static void Binarizer(SparkConf conf) {
+        SparkSession spark = JavaSparkSessionSingleton.getInstance(conf);
+        List<Row> data = Arrays.asList(
+                RowFactory.create(0, 0.1),
+                RowFactory.create(1, 0.8),
+                RowFactory.create(2, 0.2)
+        );
+        StructType schema = new StructType(new StructField[]{
+                new StructField("id", DataTypes.IntegerType, false, Metadata.empty()),
+                new StructField("feature", DataTypes.DoubleType, false, Metadata.empty())
+        });
+        Dataset<Row> continuousDataFrame = spark.createDataFrame(data, schema);
+
+        Binarizer binarizer = new Binarizer()
+                .setInputCol("feature")
+                .setOutputCol("binarized_feature")
+                .setThreshold(0.5);
+
+        Dataset<Row> binarizedDataFrame = binarizer.transform(continuousDataFrame);
+
+        System.out.println("Binarizer output with Threshold = " + binarizer.getThreshold());
+        binarizedDataFrame.show();
+/*
+Binarizer output with Threshold = 0.5
+17/11/14 23:53:29 INFO CodeGenerator: Code generated in 181.435364 ms
+17/11/14 23:53:29 INFO CodeGenerator: Code generated in 10.755877 ms
++---+-------+-----------------+
+| id|feature|binarized_feature|
++---+-------+-----------------+
+|  0|    0.1|              0.0|
+|  1|    0.8|              1.0|
+|  2|    0.2|              0.0|
++---+-------+-----------------+
+ */
+
+    }
+
+    public static void PCA(SparkConf conf) {
+        SparkSession spark = JavaSparkSessionSingleton.getInstance(conf);
+        List<Row> data = Arrays.asList(
+                RowFactory.create(Vectors.sparse(5, new int[]{1, 3}, new double[]{1.0, 7.0})),
+                RowFactory.create(Vectors.dense(2.0, 0.0, 3.0, 4.0, 5.0)),
+                RowFactory.create(Vectors.dense(4.0, 0.0, 0.0, 6.0, 7.0))
+        );
+
+        StructType schema = new StructType(new StructField[]{
+                new StructField("features", new VectorUDT(), false, Metadata.empty()),
+        });
+
+        Dataset<Row> df = spark.createDataFrame(data, schema);
+
+        PCAModel pca = new PCA()
+                .setInputCol("features")
+                .setOutputCol("pcaFeatures")
+                .setK(3)
+                .fit(df);
+
+        Dataset<Row> result = pca.transform(df).select("pcaFeatures");
+        result.show(false);
+/*
++-----------------------------------------------------------+
+|pcaFeatures                                                |
++-----------------------------------------------------------+
+|[1.6485728230883807,-4.013282700516296,-5.524543751369388] |
+|[-4.645104331781534,-1.1167972663619026,-5.524543751369387]|
+|[-6.428880535676489,-5.337951427775355,-5.524543751369389] |
++-----------------------------------------------------------+
+*/
     }
 
     public static void wordCountJava7(String filename) {
