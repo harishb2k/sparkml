@@ -4,6 +4,10 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.apache.spark.ml.feature.NGram;
+import org.apache.spark.ml.feature.RegexTokenizer;
+import org.apache.spark.ml.linalg.VectorUDT;
+import org.apache.spark.ml.linalg.Vectors;
+import org.apache.spark.ml.stat.Correlation;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.RowFactory;
@@ -32,6 +36,9 @@ import org.apache.spark.streaming.kafka.KafkaUtils;
 import org.apache.spark.streaming.kafka.OffsetRange;
 import scala.Serializable;
 import scala.Tuple2;
+import scala.collection.mutable.WrappedArray;
+import static org.apache.spark.sql.functions.callUDF;
+import static org.apache.spark.sql.functions.col;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,6 +49,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.apache.spark.ml.feature.Tokenizer;
 
 public class App {
     private static final Pattern SPACE = Pattern.compile(" ");
@@ -49,14 +57,19 @@ public class App {
 
     public static void main(String[] args) throws Exception {
 
+        SparkConf conf = new SparkConf().setMaster("local")
+                .setAppName("Work Count App 1");
+
         if (true) {
             // new JavaNGramExample().main(args);
             // return;
+
+            Tokenizer(conf);
+            return;
         }
 
 
-        SparkConf conf = new SparkConf().setMaster("local")
-                .setAppName("Work Count App 1");
+
         conf.setExecutorEnv("SPARK_MASTER_HOST", "127.0.0.1");
         JavaStreamingContext sc = new JavaStreamingContext(conf, Durations.milliseconds(5000));
 
@@ -84,6 +97,7 @@ public class App {
         JavaDStream<String> lines = kafkaStream.map(new FirstMap());
         JavaDStream<String> words = lines.flatMap(new FlatMapper());
         // JavaPairDStream<String, Integer> wordCounts = words.mapToPair(new XX()).reduceByKey(new XY());
+
 
         //wordCounts.print();
         lines.foreachRDD((stringJavaRDD, time) -> {
@@ -114,12 +128,90 @@ public class App {
             NGram ngramTransformer = new NGram().setN(10).setInputCol("words").setOutputCol("ngrams");
 
             Dataset<org.apache.spark.sql.Row> ngramDataFrame = ngramTransformer.transform(msgDataFrame);
-            ngramDataFrame.select("ngrams").show(false);
+            ngramDataFrame.select("*").show(false);
         });
 
 
         sc.start();
         sc.awaitTermination();
+    }
+
+    public static void CorrelationExample(SparkConf conf) {
+        SparkSession spark = JavaSparkSessionSingleton.getInstance(conf);
+
+        List<Row> data = Arrays.asList(
+                RowFactory.create(Vectors.sparse(4, new int[]{0, 3}, new double[]{1.0, -2.0})),
+                RowFactory.create(Vectors.dense(4.0, 5.0, 0.0, 3.0)),
+                RowFactory.create(Vectors.dense(6.0, 7.0, 0.0, 8.0)),
+                RowFactory.create(Vectors.sparse(4, new int[]{0, 3}, new double[]{9.0, 1.0}))
+        );
+
+        StructType schema = new StructType(new StructField[]{
+                new StructField("features", new VectorUDT(), false, Metadata.empty()),
+        });
+
+        Dataset<Row> df = spark.createDataFrame(data, schema);
+        Row r1 = Correlation.corr(df, "features").head();
+        System.out.println("Pearson correlation matrix:\n" + r1.get(0).toString());
+
+        Row r2 = Correlation.corr(df, "features", "spearman").head();
+        System.out.println("Spearman correlation matrix:\n" + r2.get(0).toString());
+    }
+
+    public static void Tokenizer(SparkConf conf) {
+        SparkSession spark = JavaSparkSessionSingleton.getInstance(conf);
+
+        List<Row> data = Arrays.asList(
+                RowFactory.create(0, "Hi I heard about Spark"),
+                RowFactory.create(1, "I wish Java could use case classes"),
+                RowFactory.create(2, "Logistic,regression,models,are,neat")
+        );
+
+        StructType schema = new StructType(new StructField[]{
+                new StructField("id", DataTypes.IntegerType, false, Metadata.empty()),
+                new StructField("sentence", DataTypes.StringType, false, Metadata.empty())
+        });
+
+        Dataset<Row> sentenceDataFrame = spark.createDataFrame(data, schema);
+
+        Tokenizer tokenizer = new Tokenizer().setInputCol("sentence").setOutputCol("words");
+
+        RegexTokenizer regexTokenizer = new RegexTokenizer()
+                .setInputCol("sentence")
+                .setOutputCol("words")
+                .setPattern("\\W");  // alternatively .setPattern("\\w+").setGaps(false);
+
+        spark.udf().register(
+                "countTokens", (WrappedArray<?> words) -> words.size(), DataTypes.IntegerType);
+
+        Dataset<Row> tokenized = tokenizer.transform(sentenceDataFrame);
+        tokenized.select("sentence", "words")
+                .withColumn("tokens", callUDF("countTokens", col("words")))
+                .show(false);
+/*
++-----------------------------------+------------------------------------------+------+
+|sentence                           |words                                     |tokens|
++-----------------------------------+------------------------------------------+------+
+|Hi I heard about Spark             |[hi, i, heard, about, spark]              |5     |
+|I wish Java could use case classes |[i, wish, java, could, use, case, classes]|7     |
+|Logistic,regression,models,are,neat|[logistic,regression,models,are,neat]     |1     |
++-----------------------------------+------------------------------------------+------+
+*/
+
+        Dataset<Row> regexTokenized = regexTokenizer.transform(sentenceDataFrame);
+        regexTokenized.select("sentence", "words")
+                .withColumn("tokens", callUDF("countTokens", col("words")))
+                .show(false);
+/*
++-----------------------------------+------------------------------------------+------+
+|sentence                           |words                                     |tokens|
++-----------------------------------+------------------------------------------+------+
+|Hi I heard about Spark             |[hi, i, heard, about, spark]              |5     |
+|I wish Java could use case classes |[i, wish, java, could, use, case, classes]|7     |
+|Logistic,regression,models,are,neat|[logistic, regression, models, are, neat] |5     |
++-----------------------------------+------------------------------------------+------+
+ */
+
     }
 
     public static void wordCountJava7(String filename) {
