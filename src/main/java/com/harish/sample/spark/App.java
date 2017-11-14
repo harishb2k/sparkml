@@ -4,8 +4,11 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.apache.spark.ml.feature.Binarizer;
+import org.apache.spark.ml.feature.BucketedRandomProjectionLSH;
+import org.apache.spark.ml.feature.BucketedRandomProjectionLSHModel;
 import org.apache.spark.ml.feature.NGram;
 import org.apache.spark.ml.feature.RegexTokenizer;
+import org.apache.spark.ml.linalg.Vector;
 import org.apache.spark.ml.linalg.VectorUDT;
 import org.apache.spark.ml.linalg.Vectors;
 import org.apache.spark.ml.stat.Correlation;
@@ -67,7 +70,7 @@ public class App {
             // new JavaNGramExample().main(args);
             // return;
 
-            PCA(conf);
+            LHS_Bucketed(conf);
             return;
         }
 
@@ -287,6 +290,98 @@ Binarizer output with Threshold = 0.5
 +-----------------------------------------------------------+
 */
     }
+
+    public static void LHS_Bucketed(SparkConf conf) {
+        SparkSession spark = JavaSparkSessionSingleton.getInstance(conf);
+
+        List<Row> dataA = Arrays.asList(
+                RowFactory.create(0, Vectors.dense(1.0, 1.0)),
+                RowFactory.create(1, Vectors.dense(1.0, -1.0)),
+                RowFactory.create(2, Vectors.dense(-1.0, -1.0)),
+                RowFactory.create(3, Vectors.dense(-1.0, 1.0))
+        );
+
+        List<Row> dataB = Arrays.asList(
+                RowFactory.create(4, Vectors.dense(1.0, 0.0)),
+                RowFactory.create(5, Vectors.dense(-1.0, 0.0)),
+                RowFactory.create(6, Vectors.dense(0.0, 1.0)),
+                RowFactory.create(7, Vectors.dense(0.0, -1.0))
+        );
+
+        StructType schema = new StructType(new StructField[]{
+                new StructField("id", DataTypes.IntegerType, false, Metadata.empty()),
+                new StructField("features", new VectorUDT(), false, Metadata.empty())
+        });
+        Dataset<Row> dfA = spark.createDataFrame(dataA, schema);
+        Dataset<Row> dfB = spark.createDataFrame(dataB, schema);
+
+        Vector key = Vectors.dense(1.0, 0.0);
+
+        BucketedRandomProjectionLSH mh = new BucketedRandomProjectionLSH()
+                .setBucketLength(2.0)
+                .setNumHashTables(3)
+                .setInputCol("features")
+                .setOutputCol("hashes");
+
+        BucketedRandomProjectionLSHModel model = mh.fit(dfA);
+
+// Feature Transformation
+        System.out.println("The hashed dataset where hashed values are stored in the column 'hashes':");
+        model.transform(dfA).show();
+/*
++---+-----------+--------------------+
+| id|   features|              hashes|
++---+-----------+--------------------+
+|  0|  [1.0,1.0]|[[0.0], [0.0], [-...|
+|  1| [1.0,-1.0]|[[-1.0], [-1.0], ...|
+|  2|[-1.0,-1.0]|[[-1.0], [-1.0], ...|
+|  3| [-1.0,1.0]|[[0.0], [0.0], [-...|
++---+-----------+--------------------+
+ */
+
+// Compute the locality sensitive hashes for the input rows, then perform approximate
+// similarity join.
+// We could avoid computing hashes by passing in the already-transformed dataset, e.g.
+// `model.approxSimilarityJoin(transformedA, transformedB, 1.5)`
+        System.out.println("Approximately joining dfA and dfB on distance smaller than 1.5:");
+        model.approxSimilarityJoin(dfA, dfB, 1.5, "EuclideanDistance")
+                .select(col("datasetA.id").alias("idA"),
+                        col("datasetB.id").alias("idB"),
+                        col("EuclideanDistance")).show();
+
+/*
++---+---+-----------------+
+|idA|idB|EuclideanDistance|
++---+---+-----------------+
+|  1|  4|              1.0|
+|  0|  6|              1.0|
+|  1|  7|              1.0|
+|  3|  5|              1.0|
+|  0|  4|              1.0|
+|  3|  6|              1.0|
+|  2|  7|              1.0|
+|  2|  5|              1.0|
++---+---+-----------------+
+*/
+
+// Compute the locality sensitive hashes for the input rows, then perform approximate nearest
+// neighbor search.
+// We could avoid computing hashes by passing in the already-transformed dataset, e.g.
+// `model.approxNearestNeighbors(transformedA, key, 2)`
+        System.out.println("Approximately searching dfA for 2 nearest neighbors of the key:");
+        model.approxNearestNeighbors(dfA, key, 2).show();
+
+/*
++---+----------+--------------------+-------+
+| id|  features|              hashes|distCol|
++---+----------+--------------------+-------+
+|  0| [1.0,1.0]|[[0.0], [0.0], [-...|    1.0|
+|  1|[1.0,-1.0]|[[-1.0], [-1.0], ...|    1.0|
++---+----------+--------------------+-------+
+ */
+
+    }
+
 
     public static void wordCountJava7(String filename) {
         // Define a configuration to use to interact with Spark
