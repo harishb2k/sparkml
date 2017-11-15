@@ -87,9 +87,9 @@ public class App {
         kafkaParams.put("startingOffsets", "earliest");
 
         OffsetRange offsetRange[] = new OffsetRange[1];
-        offsetRange[0] = OffsetRange.create("com_olacabs_cpp_generic_events", 0, 0l, Long.MAX_VALUE);
+        offsetRange[0] = OffsetRange.create("test_topic", 0, 0l, Long.MAX_VALUE);
 
-        Set<String> topicsSet = new HashSet<String>(Arrays.asList("com_olacabs_cpp_generic_events".split(",")));
+        Set<String> topicsSet = new HashSet<String>(Arrays.asList("test_topic".split(",")));
 
         JavaPairInputDStream<String, String> kafkaStream = KafkaUtils.createDirectStream(
                 sc,
